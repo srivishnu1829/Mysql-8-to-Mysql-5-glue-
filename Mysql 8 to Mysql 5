@@ -1,0 +1,108 @@
+import logging
+import sys
+import yaml
+
+from pyspark.sql import SparkSession
+from awsglue.utils import getResolvedOptions
+
+
+def logger_config(level=logging.INFO, log_format=DEFAULT_LOG_FORMAT):
+
+    DEFAULT_LOG_FORMAT = '%(asctime)s - %(message)s'
+    effective_format = log_format or DEFAULT_LOG_FORMAT
+    formatter = logging.Formatter(effective_format)
+    cls = type(__file__, (), {})
+
+    logger = logging.getLogger(cls.__name__)
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+    stdout_filter = SingleLevelFilter(level=level, reject=False)
+    stdout_handler.addFilter(stdout_filter)
+
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(formatter)
+    stderr_filter = SingleLevelFilter(level=level, reject=True)
+    stderr_handler.addFilter(stderr_filter)
+
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
+    logger.setLevel(level)
+
+    return logger
+
+def read_yaml_from_s3(s3_client, bucket_name, yaml_file_prefix):
+
+    file_content = s3_client.get_object(Bucket=bucket_name, Key=yaml_file_prefix)[
+        "Body"
+    ].read()
+    yaml_content = yaml.safe_load(file_content.decode("utf-8"))
+    return yaml_content
+
+def create_dataframe_from_jdbc(spark, url, table_name, user, password):
+
+    db_properties={"user": user, "password": password}
+    df = spark.read.jdbc(url, dbtable, properties=db_properties)
+    return df
+
+def write_dataframe_into_jdbc(df, url, table_name, user, password):
+
+    db_properties={"user": user, "password": password}
+    df.write.option("truncate", "true").jdbc(url='', table='', mode="overwrite", properties=db_properties)
+
+def execute(s3_client, bucket_name, config_file_prefix, spark, logger):
+
+    config_details = read_yaml_from_s3(s3_client, bucket_name, config_file_prefix)
+
+    source_url = config_details['source_url']
+    source_user_name = config_details['source_user_name']
+    source_password = config_details['source_password']
+
+    target_url = config_details['target_url']
+    target_user_name = config_details['target_user_name']
+    target_password = config_details['target_password']
+
+    source_to_target_mapping = config_details['source_to_target_mapping']
+
+    job_status = 'SUCCESS'
+    for source_table_name, target_table_name in source_to_target_mapping:
+
+        try:
+            src_df = create_dataframe_from_jdbc(spark, source_url, source_table_name, source_user_name, source_password)
+            logger.info(f'Spark dataframe created succesfully for {source_table_name}')
+
+            write_dataframe_into_jdbc(src_df, target_url, target_table_name, target_user_name, target_password)
+            logger.info(f'Data loaded succesfully into {target_table_name}')
+
+        except Exception:
+            job_status = 'FAIL'
+            logger.exception(f'Data not loaded into {target_table_name}')
+
+
+def main():
+
+    args = getResolvedOptions(
+        sys.argv, ["JOB_NAME", "config_file_prefix", 'bucket_name']
+    )
+
+    config_file_prefix = args["config_file_prefix"]
+    bucket_name = args["bucket_name"]
+
+    spark = SparkSession.getOrCreate()
+    s3_client = boto3.client("s3")
+    logger = logger_config()
+
+    obj = execute(
+        s3_client,
+        bucket_name,
+        config_file_prefix,
+        spark,
+        logger
+    )
+
+    if job_status == "FAIL":
+        raise Exception("Source to target load job Failed ")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,7 @@
+  source_url: 'jdbc:mysql://--------------------------------------------/prod'
+  source_user_name: user1
+  source_password: 456577
+  target_url: 'jdbc:mysql://cp------------------------------------------/prod'
+  target_user_name: admin
+  target_password: qq672e
+  source_to_target_mapping: {'customer_data': 'customer_data','customer_person_data': 'customer_person_data','person_data': 'person_data'} 
